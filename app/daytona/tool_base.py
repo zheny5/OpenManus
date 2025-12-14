@@ -1,25 +1,60 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, ClassVar, Dict, Optional
+from typing import Any, ClassVar, Dict, Optional, TYPE_CHECKING
 
-from daytona import Daytona, DaytonaConfig, Sandbox, SandboxState
+if TYPE_CHECKING:
+    from daytona import Daytona as _Daytona
+    from daytona import DaytonaConfig as _DaytonaConfig
+    from daytona import Sandbox as _Sandbox
+    from daytona import SandboxState as _SandboxState
+else:
+    _Daytona = object  # type: ignore
+    _DaytonaConfig = object  # type: ignore
+    _Sandbox = object  # type: ignore
+    _SandboxState = object  # type: ignore
+
+try:
+    from daytona import Daytona as _Daytona  # type: ignore
+    from daytona import DaytonaConfig as _DaytonaConfig  # type: ignore
+    from daytona import Sandbox as _Sandbox  # type: ignore
+    from daytona import SandboxState as _SandboxState  # type: ignore
+
+    _DAYTONA_AVAILABLE = True
+except ModuleNotFoundError:
+    _DAYTONA_AVAILABLE = False
+
+# Backwards-compatible re-exports used across the codebase (mostly for typing).
+Daytona = _Daytona  # type: ignore
+DaytonaConfig = _DaytonaConfig  # type: ignore
+Sandbox = _Sandbox  # type: ignore
+SandboxState = _SandboxState  # type: ignore
 from pydantic import Field
 
 from app.config import config
-from app.daytona.sandbox import create_sandbox, start_supervisord_session
 from app.tool.base import BaseTool
 from app.utils.files_utils import clean_path
 from app.utils.logger import logger
 
 
-# load_dotenv()
-daytona_settings = config.daytona
-daytona_config = DaytonaConfig(
-    api_key=daytona_settings.daytona_api_key,
-    server_url=daytona_settings.daytona_server_url,
-    target=daytona_settings.daytona_target,
-)
-daytona = Daytona(daytona_config)
+def _require_daytona() -> None:
+    """Raise a clear error if Daytona SDK isn't installed."""
+    if not _DAYTONA_AVAILABLE:
+        raise ModuleNotFoundError(
+            "Missing optional dependency 'daytona'. "
+            "Install it with: uv add daytona (or `uv pip install daytona`)."
+        )
+
+
+def _get_daytona_client() -> "_Daytona":
+    """Create a Daytona client from config when needed."""
+    _require_daytona()
+    daytona_settings = config.daytona
+    daytona_config = _DaytonaConfig(  # type: ignore[call-arg]
+        api_key=daytona_settings.daytona_api_key,
+        server_url=daytona_settings.daytona_server_url,
+        target=daytona_settings.daytona_target,
+    )
+    return _Daytona(daytona_config)  # type: ignore[call-arg]
 
 
 @dataclass
@@ -58,7 +93,7 @@ class SandboxToolsBase(BaseTool):
     # thread_manager: Optional[ThreadManager] = None
 
     # Private fields (not part of the model schema)
-    _sandbox: Optional[Sandbox] = None
+    _sandbox: Optional["_Sandbox"] = None
     _sandbox_id: Optional[str] = None
     _sandbox_pass: Optional[str] = None
     workspace_path: str = Field(default="/workspace", exclude=True)
@@ -66,13 +101,16 @@ class SandboxToolsBase(BaseTool):
 
     class Config:
         arbitrary_types_allowed = True  # Allow non-pydantic types like ThreadManager
-        underscore_attrs_are_private = True
 
-    async def _ensure_sandbox(self) -> Sandbox:
+    async def _ensure_sandbox(self) -> "_Sandbox":
         """Ensure we have a valid sandbox instance, retrieving it from the project if needed."""
+        _require_daytona()
         if self._sandbox is None:
             # Get or start the sandbox
             try:
+                # Lazy import: avoid importing Daytona SDK at app startup
+                from app.daytona.sandbox import create_sandbox
+
                 self._sandbox = create_sandbox(password=config.daytona.VNC_password)
                 # Log URLs if not already printed
                 if not SandboxToolsBase._urls_printed:
@@ -98,17 +136,20 @@ class SandboxToolsBase(BaseTool):
                 raise e
         else:
             if (
-                self._sandbox.state == SandboxState.ARCHIVED
-                or self._sandbox.state == SandboxState.STOPPED
+                self._sandbox.state == _SandboxState.ARCHIVED  # type: ignore[attr-defined]
+                or self._sandbox.state == _SandboxState.STOPPED  # type: ignore[attr-defined]
             ):
                 logger.info(f"Sandbox is in {self._sandbox.state} state. Starting...")
                 try:
+                    daytona = _get_daytona_client()
                     daytona.start(self._sandbox)
                     # Wait a moment for the sandbox to initialize
                     # sleep(5)
                     # Refresh sandbox state after starting
 
                     # Start supervisord in a session when restarting
+                    from app.daytona.sandbox import start_supervisord_session
+
                     start_supervisord_session(self._sandbox)
                 except Exception as e:
                     logger.error(f"Error starting sandbox: {e}")
@@ -116,7 +157,7 @@ class SandboxToolsBase(BaseTool):
         return self._sandbox
 
     @property
-    def sandbox(self) -> Sandbox:
+    def sandbox(self) -> "_Sandbox":
         """Get the sandbox instance, ensuring it exists."""
         if self._sandbox is None:
             raise RuntimeError("Sandbox not initialized. Call _ensure_sandbox() first.")

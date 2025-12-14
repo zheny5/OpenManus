@@ -98,7 +98,7 @@ class BaseTool(ABC, BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-        underscore_attrs_are_private = False
+        # NOTE: Pydantic v2 removed `underscore_attrs_are_private`.
 
     # def __init__(self, **data):
     #     """Initialize tool with model validation and schema registration."""
